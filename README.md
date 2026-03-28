@@ -1,0 +1,502 @@
+
+-- LocalScript trong StarterPlayerScripts
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+
+-- ============ CẤU HÌNH ============
+local CONFIG = {
+    FARM_RANGE      = 130,  -- Tăng phạm vi tìm mob
+    SAFE_DISTANCE   = 80,   -- Đứng xa hơn để đánh tầm xa
+    ATTACK_COOLDOWN = 0.05,
+    COMBO_COUNT     = 5,
+    COMBO_DELAY     = 0.03,
+    MULTI_RANGE     = 30,
+    DODGE_HP_THRESH = 40,
+    TELEPORT_OFFSET = Vector3.new(0, 5, 0),
+    QUEST_RETRY     = 2,
+
+    QUEST_NPCS = {
+        -- FIRST SEA
+        { name = "Bandit",              level = 1,    pos = Vector3.new(977, 124, 534)     },
+        { name = "Jungle Pirate",       level = 10,   pos = Vector3.new(-1768, 5, -443)    },
+        { name = "Village Pirate",      level = 30,   pos = Vector3.new(-2632, 8, 1996)    },
+        { name = "Desert Bandit",       level = 60,   pos = Vector3.new(930, 157, 4360)    },
+        { name = "Snow Bandit",         level = 90,   pos = Vector3.new(-4100, 208, 816)   },
+        { name = "Military Soldier",    level = 120,  pos = Vector3.new(-2500, 8, -680)    },
+        { name = "Sky Bandit",          level = 150,  pos = Vector3.new(-200, 900, -2100)  },
+        { name = "Prisoner",            level = 190,  pos = Vector3.new(3000, 10, 1200)    },
+        { name = "Gladiator",           level = 225,  pos = Vector3.new(400, 10, -2900)    },
+        { name = "Magma Ninja",         level = 300,  pos = Vector3.new(-4700, 10, -875)   },
+        { name = "Fishman",             level = 375,  pos = Vector3.new(-7475, 112, 1050)  },
+        { name = "Sky Guard",           level = 450,  pos = Vector3.new(-500, 1800, -1000) },
+        { name = "Royal Squad",         level = 475,  pos = Vector3.new(-800, 2300, -1500) },
+        { name = "Fountain Fighter",    level = 575,  pos = Vector3.new(0, 31, -1600)      },
+        { name = "Galley Pirate",       level = 625,  pos = Vector3.new(-254, 70, -1581)   },
+        -- SECOND SEA
+        { name = "Zombie",              level = 700,  pos = Vector3.new(1200, 15, -2900)   },
+        { name = "Demonic Soul",        level = 850,  pos = Vector3.new(500, 15, -3500)    },
+        { name = "Jungle Warrior",      level = 875,  pos = Vector3.new(-900, 20, -4500)   },
+        { name = "Possessed Mummy",     level = 950,  pos = Vector3.new(2000, 30, -4200)   },
+        { name = "Snow Trooper",        level = 1000, pos = Vector3.new(3500, 200, -3900)  },
+        { name = "Ice Fighter",         level = 1100, pos = Vector3.new(4200, 150, -3100)  },
+        { name = "Ship Deckhand",       level = 1250, pos = Vector3.new(5000, 10, -2000)   },
+        { name = "Ice Soldier",         level = 1350, pos = Vector3.new(4800, 400, -1500)  },
+        { name = "Island Crew",         level = 1425, pos = Vector3.new(6000, 10, -1000)   },
+        -- THIRD SEA
+        { name = "Pirate Millionaire",  level = 1500, pos = Vector3.new(-800, 10, 5000)    },
+        { name = "Pistol Billionaire",  level = 1575, pos = Vector3.new(-1200, 10, 5800)   },
+        { name = "Dragon Crew Warrior", level = 1625, pos = Vector3.new(2000, 10, 6500)    },
+        { name = "Dragon Crew Archer",  level = 1700, pos = Vector3.new(2500, 10, 7000)    },
+        { name = "Female Islander",     level = 1750, pos = Vector3.new(3200, 50, 7500)    },
+        { name = "Giant Islander",      level = 1800, pos = Vector3.new(3800, 50, 8000)    },
+        { name = "Fishman Raider",      level = 1775, pos = Vector3.new(-3000, 10, 8500)   },
+        { name = "Fishman Captain",     level = 1800, pos = Vector3.new(-3500, 10, 9000)   },
+        { name = "Forest Pirate",       level = 1825, pos = Vector3.new(-4000, 80, 9500)   },
+        { name = "Mythological Pirate", level = 1850, pos = Vector3.new(-4500, 80, 10000)  },
+        { name = "Marine Commodore",    level = 1900, pos = Vector3.new(5000, 10, 9000)    },
+        { name = "Marine Rear Admiral", level = 1950, pos = Vector3.new(5500, 10, 9500)    },
+        { name = "Sea Soldier",         level = 2000, pos = Vector3.new(-5000, 10, 11000)  },
+        { name = "Water Fighter",       level = 2050, pos = Vector3.new(-5500, 10, 11500)  },
+    },
+}
+
+-- ============ TRẠNG THÁI ============
+local state = {
+    autoFarm    = false,
+    multiTarget = true,
+    autoDodge   = true,
+    autoQuest   = false,
+}
+
+local lastAttackTime = 0
+local currentTarget  = nil
+local comboStep      = 0
+local isDodging      = false
+local questState     = "IDLE"
+local currentNPC     = nil
+local questLog       = "Chờ bật Auto Quest..."
+local questCoroutine = nil
+
+-- ============ TIỆN ÍCH ============
+
+local function getCharacter()
+    local char = player.Character
+    if not char then return nil, nil, nil end
+    return char,
+           char:FindFirstChild("HumanoidRootPart"),
+           char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getMobRoot(model)
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("Torso")
+end
+
+local function isValidMob(model)
+    if not model or not model.Parent then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if Players:GetPlayerFromCharacter(model) then return false end
+    return true
+end
+
+local function getPlayerLevel()
+    local ls = player:FindFirstChild("leaderstats")
+    local lv = ls and ls:FindFirstChild("Level")
+    return lv and lv.Value or 0
+end
+
+local function getBestQuestNPC()
+    local lvl  = getPlayerLevel()
+    local best = nil
+    for _, npc in ipairs(CONFIG.QUEST_NPCS) do
+        if lvl >= npc.level then best = npc end
+    end
+    return best
+end
+
+local function teleportTo(pos)
+    local _, root = getCharacter()
+    if root then root.CFrame = CFrame.new(pos + CONFIG.TELEPORT_OFFSET) end
+end
+
+local function findNPCModel(npcName)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name:lower():find(npcName:lower()) then
+            return obj
+        end
+    end
+    return nil
+end
+
+local function interactNPC(npcModel)
+    if not npcModel then return false end
+    for _, obj in ipairs(npcModel:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            fireproximityprompt(obj)
+            return true
+        end
+    end
+    for _, obj in ipairs(npcModel:GetDescendants()) do
+        if obj:IsA("ClickDetector") then
+            fireclickdetector(obj)
+            return true
+        end
+    end
+    return false
+end
+
+local function findNearestMob(rootPos)
+    local nearest, nearestDist = nil, CONFIG.FARM_RANGE
+    for _, model in ipairs(workspace:GetDescendants()) do
+        if model:IsA("Model") and isValidMob(model) then
+            local r = getMobRoot(model)
+            if r then
+                local d = (rootPos - r.Position).Magnitude
+                if d < nearestDist then
+                    nearestDist = d
+                    nearest     = model
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function findAoETargets(centerPos)
+    local list = {}
+    for _, model in ipairs(workspace:GetDescendants()) do
+        if model:IsA("Model") and isValidMob(model) then
+            local r = getMobRoot(model)
+            if r and (centerPos - r.Position).Magnitude <= CONFIG.MULTI_RANGE then
+                table.insert(list, model)
+            end
+        end
+    end
+    return list
+end
+
+local function fireAttack(char, root, targetPos)
+    root.CFrame = CFrame.lookAt(root.Position, targetPos)
+    local tool  = char:FindFirstChildOfClass("Tool")
+    if tool then
+        tool:Activate()
+        comboStep = (comboStep % CONFIG.COMBO_COUNT) + 1
+    end
+end
+
+local function tryDodge(humanoid, root)
+    if not state.autoDodge or isDodging then return end
+    if (humanoid.Health / humanoid.MaxHealth) * 100 <= CONFIG.DODGE_HP_THRESH then
+        isDodging = true
+        root.CFrame = root.CFrame + root.CFrame.LookVector * -25
+        task.delay(1.2, function() isDodging = false end)
+    end
+end
+
+-- ============ QUEST LOOP ============
+local function runQuestLoop()
+    while state.autoQuest do
+        local npc = getBestQuestNPC()
+        if not npc then
+            questLog   = "❌ Không tìm thấy NPC"
+            questState = "IDLE"
+            task.wait(CONFIG.QUEST_RETRY)
+            continue
+        end
+
+        currentNPC = npc
+        questState = "TELEPORT"
+        questLog   = "🚀 Đến " .. npc.name .. " (Lv " .. npc.level .. ")"
+        teleportTo(npc.pos)
+        task.wait(1)
+
+        questState = "NHẬN QUEST"
+        questLog   = "💬 Tương tác NPC..."
+        local npcModel = findNPCModel(npc.name)
+        if not interactNPC(npcModel) then
+            questLog = "⚠️ Không tương tác được, thử lại..."
+            task.wait(CONFIG.QUEST_RETRY)
+            continue
+        end
+        task.wait(1)
+
+        questState     = "FARMING"
+        state.autoFarm = true
+        local farmTimer = 0
+
+        while state.autoQuest and farmTimer < 45 do
+            task.wait(1)
+            farmTimer = farmTimer + 1
+            questLog  = "⚔️ Farm " .. farmTimer .. "s / 45s  |  Lv " .. getPlayerLevel()
+        end
+
+        state.autoFarm = false
+        currentTarget  = nil
+        questState     = "NỘP QUEST"
+        questLog       = "📦 Nộp quest..."
+        teleportTo(npc.pos)
+        task.wait(1)
+        interactNPC(findNPCModel(npc.name))
+        task.wait(1)
+
+        questLog   = "✅ Xong! Vòng mới..."
+        questState = "IDLE"
+        task.wait(1.5)
+    end
+
+    state.autoFarm = false
+    currentTarget  = nil
+    currentNPC     = nil
+    questState     = "IDLE"
+    questLog       = "⛔ Auto Quest OFF"
+end
+
+-- ============ GUI ============
+local function buildGUI()
+    if player.PlayerGui:FindFirstChild("ThaiTujrHub") then
+        player.PlayerGui.ThaiTujrHub:Destroy()
+    end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name           = "ThaiTujrHub"
+    sg.ResetOnSpawn   = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.Parent         = player.PlayerGui
+
+    local main = Instance.new("Frame")
+    main.Name             = "Main"
+    main.Size             = UDim2.new(0, 310, 0, 420)
+    main.Position         = UDim2.new(0, 16, 0.5, -210)
+    main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+    main.BorderSizePixel  = 0
+    main.Active           = true
+    main.Draggable        = true
+    main.Parent           = sg
+    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
+
+    local mainStroke = Instance.new("UIStroke")
+    mainStroke.Color     = Color3.fromRGB(220, 40, 40)
+    mainStroke.Thickness = 2
+    mainStroke.Parent    = main
+
+    -- Header
+    local header = Instance.new("Frame")
+    header.Size             = UDim2.new(1, 0, 0, 48)
+    header.BackgroundColor3 = Color3.fromRGB(180, 30, 30)
+    header.BorderSizePixel  = 0
+    header.Parent           = main
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 14)
+
+    local headerFix = Instance.new("Frame")
+    headerFix.Size             = UDim2.new(1, 0, 0, 14)
+    headerFix.Position         = UDim2.new(0, 0, 1, -14)
+    headerFix.BackgroundColor3 = Color3.fromRGB(180, 30, 30)
+    headerFix.BorderSizePixel  = 0
+    headerFix.Parent           = header
+
+    local hubTitle = Instance.new("TextLabel")
+    hubTitle.Size               = UDim2.new(1, -16, 1, 0)
+    hubTitle.Position           = UDim2.new(0, 14, 0, 0)
+    hubTitle.BackgroundTransparency = 1
+    hubTitle.Text               = "🗡️  ThaiTujr Hub"
+    hubTitle.TextColor3         = Color3.fromRGB(255, 255, 255)
+    hubTitle.Font               = Enum.Font.GothamBold
+    hubTitle.TextSize           = 18
+    hubTitle.TextXAlignment     = Enum.TextXAlignment.Left
+    hubTitle.Parent             = header
+
+    local subTitle = Instance.new("TextLabel")
+    subTitle.Size               = UDim2.new(0, 130, 0, 14)
+    subTitle.Position           = UDim2.new(1, -138, 0.5, -7)
+    subTitle.BackgroundTransparency = 1
+    subTitle.Text               = "Blox Fruits  v1.0"
+    subTitle.TextColor3         = Color3.fromRGB(255, 180, 180)
+    subTitle.Font               = Enum.Font.Gotham
+    subTitle.TextSize           = 11
+    subTitle.TextXAlignment     = Enum.TextXAlignment.Right
+    subTitle.Parent             = header
+
+    -- HUD
+    local hud = Instance.new("Frame")
+    hud.Size             = UDim2.new(1, -20, 0, 66)
+    hud.Position         = UDim2.new(0, 10, 0, 56)
+    hud.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    hud.BorderSizePixel  = 0
+    hud.Parent           = main
+    Instance.new("UICorner", hud).CornerRadius = UDim.new(0, 10)
+    local hudStroke = Instance.new("UIStroke")
+    hudStroke.Color     = Color3.fromRGB(80, 20, 20)
+    hudStroke.Thickness = 1
+    hudStroke.Parent    = hud
+
+    local function hudLabel(name, y, color, size)
+        local l = Instance.new("TextLabel")
+        l.Name               = name
+        l.Size               = UDim2.new(1, -12, 0, 18)
+        l.Position           = UDim2.new(0, 8, 0, y)
+        l.BackgroundTransparency = 1
+        l.TextColor3         = color
+        l.Font               = Enum.Font.Gotham
+        l.TextSize           = size or 12
+        l.TextXAlignment     = Enum.TextXAlignment.Left
+        l.Parent             = hud
+        return l
+    end
+
+    local lblTarget = hudLabel("Target", 5,  Color3.fromRGB(200, 230, 255), 12)
+    local lblCombo  = hudLabel("Combo",  26, Color3.fromRGB(255, 200, 80),  11)
+    local lblQuest  = hudLabel("Quest",  47, Color3.fromRGB(160, 200, 255), 11)
+
+    -- Toggles
+    local toggleY = 132
+    local function makeToggle(icon, label, stateKey, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size             = UDim2.new(1, -20, 0, 42)
+        btn.Position         = UDim2.new(0, 10, 0, toggleY)
+        btn.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+        btn.BorderSizePixel  = 0
+        btn.AutoButtonColor  = false
+        btn.Text             = ""
+        btn.Parent           = main
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+        local bStroke = Instance.new("UIStroke")
+        bStroke.Color     = state[stateKey] and Color3.fromRGB(220,40,40) or Color3.fromRGB(50,50,60)
+        bStroke.Thickness = 1.5
+        bStroke.Parent    = btn
+
+        local bar = Instance.new("Frame")
+        bar.Size             = UDim2.new(0, 4, 0, 24)
+        bar.Position         = UDim2.new(0, 10, 0.5, -12)
+        bar.BackgroundColor3 = state[stateKey] and Color3.fromRGB(220,40,40) or Color3.fromRGB(60,60,70)
+        bar.BorderSizePixel  = 0
+        bar.Parent           = btn
+        Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+
+        local lblName = Instance.new("TextLabel")
+        lblName.Size               = UDim2.new(1, -100, 1, 0)
+        lblName.Position           = UDim2.new(0, 24, 0, 0)
+        lblName.BackgroundTransparency = 1
+        lblName.Text               = icon .. "  " .. label
+        lblName.TextColor3         = Color3.fromRGB(220, 220, 220)
+        lblName.Font               = Enum.Font.GothamBold
+        lblName.TextSize           = 13
+        lblName.TextXAlignment     = Enum.TextXAlignment.Left
+        lblName.Parent             = btn
+
+        local pill = Instance.new("Frame")
+        pill.Size             = UDim2.new(0, 44, 0, 22)
+        pill.Position         = UDim2.new(1, -54, 0.5, -11)
+        pill.BackgroundColor3 = state[stateKey] and Color3.fromRGB(200,30,30) or Color3.fromRGB(45,45,55)
+        pill.BorderSizePixel  = 0
+        pill.Parent           = btn
+        Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+
+        local dot = Instance.new("Frame")
+        dot.Size             = UDim2.new(0, 16, 0, 16)
+        dot.Position         = state[stateKey] and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8)
+        dot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        dot.BorderSizePixel  = 0
+        dot.Parent           = pill
+        Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+        btn.MouseButton1Click:Connect(function()
+            state[stateKey] = not state[stateKey]
+            local on = state[stateKey]
+            local tw = TweenInfo.new(0.2, Enum.EasingStyle.Quart)
+            TweenService:Create(pill,    tw, { BackgroundColor3 = on and Color3.fromRGB(200,30,30) or Color3.fromRGB(45,45,55) }):Play()
+            TweenService:Create(dot,     tw, { Position = on and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8) }):Play()
+            TweenService:Create(bar,     tw, { BackgroundColor3 = on and Color3.fromRGB(220,40,40) or Color3.fromRGB(60,60,70) }):Play()
+            TweenService:Create(bStroke, tw, { Color = on and Color3.fromRGB(220,40,40) or Color3.fromRGB(50,50,60) }):Play()
+            if callback then callback(on) end
+        end)
+
+        toggleY = toggleY + 50
+    end
+
+    makeToggle("🌾", "Auto Farm",    "autoFarm",    nil)
+    makeToggle("🌀", "Multi Target", "multiTarget", nil)
+    makeToggle("🛡️", "Auto Dodge",   "autoDodge",   nil)
+    makeToggle("📋", "Auto Quest",   "autoQuest",   function(on)
+        if on then
+            questCoroutine = task.spawn(runQuestLoop)
+        else
+            if questCoroutine then task.cancel(questCoroutine) questCoroutine = nil end
+            state.autoFarm = false
+            currentTarget  = nil
+            questState     = "IDLE"
+            questLog       = "⛔ Auto Quest OFF"
+        end
+    end)
+
+    -- Footer
+    local footer = Instance.new("TextLabel")
+    footer.Size               = UDim2.new(1, 0, 0, 24)
+    footer.Position           = UDim2.new(0, 0, 1, -28)
+    footer.BackgroundTransparency = 1
+    footer.Text               = "[F2] Ẩn / Hiện   •   ThaiTujr Hub v1.0"
+    footer.TextColor3         = Color3.fromRGB(100, 100, 120)
+    footer.Font               = Enum.Font.Gotham
+    footer.TextSize           = 10
+    footer.Parent             = main
+
+    -- F2 ẩn/hiện
+    local isHidden = false
+    UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if input.KeyCode == Enum.KeyCode.F2 then
+            isHidden = not isHidden
+            TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Quart), {
+                Size = isHidden
+                    and UDim2.new(0, 310, 0, 48)
+                    or  UDim2.new(0, 310, 0, 420)
+            }):Play()
+        end
+    end)
+
+    return { lblTarget = lblTarget, lblCombo = lblCombo, lblQuest = lblQuest }
+end
+
+local UI = buildGUI()
+
+-- ============ HEARTBEAT ============
+RunService.Heartbeat:Connect(function()
+    UI.lblTarget.Text = "🎯  Target: " .. (currentTarget and currentTarget.Name or "None")
+    UI.lblCombo.Text  = "⚡  Combo: " .. comboStep
+        .. "   |   Lv: " .. getPlayerLevel()
+        .. "   |   " .. (state.autoFarm and "🟢 Farm ON" or "🔴 Farm OFF")
+    UI.lblQuest.Text  = "📋  " .. questState
+        .. (currentNPC and ("  →  " .. currentNPC.name) or "")
+        .. "  " .. questLog
+
+    if not state.autoFarm then return end
+
+    local char, root, humanoid = getCharacter()
+    if not char or not root or not humanoid then return end
+    if humanoid.Health <= 0 then state.autoFarm = false return end
+
+    tryDodge(humanoid, root)
+
+    if not isValidMob(currentTarget) then
+        currentTarget = findNearestMob(root.Position)
+        comboStep     = 0
+        if not currentTarget then return end
+    end
+
+    local mobRoot = getMobRoot(currentTarget)
+    if not mobRoot then currentTarget = nil return end
+
+    -- Giữ khoảng cách 80 studs (đánh xa)
+    local dist = (root.Position - mobRoot.Position).Magnitude
+    if dist > CONFIG.SAFE_DISTANCE + 5 then
+        local dir     = (root.Position - mobRoot.Position).Unit
+        local safePos = mobRoot.Position + dir * CONFIG.SAFE_DISTANCE + CONFIG.TELEPORT_OFFSET
+        root.CFrame   = CFrame.new(safePos, mobRoot.Position)
+    end
+
+    local
